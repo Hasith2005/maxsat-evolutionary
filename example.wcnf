@@ -1,0 +1,4 @@
+c Example file
+p wcnf 4 2
+0 1 2 3 4 0
+0 -1 -2 3 -4 0
