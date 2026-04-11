@@ -3,6 +3,14 @@ import numpy as np
 import time
 import random
 
+POP_SIZE=20
+print("POP_SIZE= ",POP_SIZE)
+TOURNAMENT_SIZE=3
+print('TOURNAMENT_SIZE= ',TOURNAMENT_SIZE)
+REPAIR_RATE=0.1
+print("REPAIR_RATE= ",REPAIR_RATE)
+FLIP_PROB=0.3
+print("FLIP_PROB= ",FLIP_PROB)
 
 # question 2
 def get_num_satisfied_clauses(file, assignment):
@@ -26,12 +34,12 @@ def check_sat_(clauses,assignment):
         # break when a literal evaluates to true.  
         for lit in clause:
             if lit<0:
-                if not(int(assignment[abs(lit)-1])) == 1:
+                if assignment[abs(lit)-1] == '0':
                     satisfied_count+=1
                     satisfied=True
                     satisfied_clauses.append(clause_idx)
                     break
-            elif int(assignment[lit-1])==1:
+            elif assignment[lit-1] == '1':
                 satisfied_count+=1
                 satisfied=True
                 satisfied_clauses.append(clause_idx)
@@ -40,7 +48,7 @@ def check_sat_(clauses,assignment):
             unsatisfied_clauses.append(clause_idx)
     
     return satisfied_clauses,unsatisfied_clauses,satisfied_count
-            
+
         
         
 # question 1
@@ -48,7 +56,7 @@ def check_sat(clause,assignment):
     return check_sat_(clause,assignment)[2]
 
 def get_random_pop(num_vars):
-    MAXSIZE=10 # only really useful if the number of variables is more than 4. 
+    MAXSIZE=POP_SIZE 
     pop=set()
     while len(pop)!=MAXSIZE:
         cand=''.join((np.random.sample((1,num_vars))>=0.5).astype(np.int_).astype(np.str_).tolist()[0])
@@ -60,59 +68,89 @@ def tournament_select(pop,k,assignment_dict):
     chosen.sort(key=lambda x: assignment_dict[x][2],reverse=True)
     return chosen[0]
 
-def uniform_crossover(parent_a,parent_b):
-    offspring_bits = [
-        p1 if random.random() < 0.5 else p2 
-        for p1, p2 in zip(parent_a, parent_b)
-    ]
-    return "".join(offspring_bits)
-
-def mutate(offspring,mutation_rate):
-    # flip a bit
-    if random.random()<mutation_rate:
-            
-        offspring=list(offspring)
-        rand_idx = random.randint(0,len(offspring)-1)
-        lit=offspring[rand_idx]
-        offspring[rand_idx]='0' if lit=='1' else '1'
-        return ''.join(offspring)
+def one_point_crossover(parent_a, parent_b):
+    randpoint = random.randint(1, len(parent_a) - 1)
+    if random.random() < 0.5:
+        return parent_a[:randpoint] + parent_b[randpoint:]
     else:
-        return offspring
+        return parent_b[:randpoint] + parent_a[randpoint:]
 
-def repair(offspring,clauses):
-    satisfied_clauses,unsatisfied_clauses,num_satisfied=check_sat_(clauses,offspring)
+def mutate(offspring):  
+    offspring=list(offspring)
+    mutation_rate=1/len(offspring)
+    for i in range (len(offspring)):
+        if random.random()<mutation_rate:            
+            offspring[i]='0' if offspring[i]=='1' else '1'
+    
+    return ''.join(offspring)
+
+
+def get_num_clauses_broken_by_flip(lit,assignment,true_lit_count,lit_clause_mapping):
+    # true lit count = {clause_idx:num_true_lits}
+    # lit_clause_mapping = {lit:[clause_idxs]}
+    break_count=0
+    if assignment[lit-1]=='1':
+        clauses_subset=lit_clause_mapping.get(lit,[]) # clauses where lit is present
+    else:
+        clauses_subset=lit_clause_mapping.get(-lit,[]) # clauses where neg lit is present
+    # once lit is flipped, only clauses_subset are re-evaluated 
+    for c in clauses_subset:
+        if true_lit_count[c] == 1:
+            break_count += 1
+    return break_count
+
+def flip_variable(lit,assignment,true_lit_count,lit_clause_mapping):
+    idx=lit-1
+    assignment[idx] = '0' if assignment[idx] == '1' else '1' # flip it 
+    for clause in lit_clause_mapping.get(lit,[]):
+        if assignment[idx]=='1':
+            true_lit_count[clause]+=1
+        else:
+            true_lit_count[clause]-=1
+    for clause in lit_clause_mapping.get(-lit, []):
+        if assignment[idx] == '0':
+            true_lit_count[clause] += 1
+        else:
+            true_lit_count[clause] -= 1
+
+def walksat_repair(assignment,clauses,true_lit_count,lit_clause_mapping):
+    # pick an unsatisfied clause:
+    unsatisfied_clauses= [idx for idx,val in enumerate(true_lit_count) if val == 0]
     if not unsatisfied_clauses:
-        return offspring
-    # choose a clause at random 
-    rand_clause_idx=random.choice(unsatisfied_clauses) # returns the index of the unsatisfied clause
-    rand_clause=clauses[rand_clause_idx]
-    # flip a variable that causes the least number of satisfied clauses to become unsatisfied while satisfying the current clause. 
-    best_assignment= offspring
-    max_satisfied_so_far = -1
-    for lit in rand_clause: # 1,-3,5,-9
-        offspring_list=list(offspring)
-        offspring_lit = offspring_list[abs(lit)-1]
-        offspring_list[abs(lit)-1] = '0' if  offspring_lit == '1' else '1' # flip the assignment for that literal and eval
-        # now check sat 
-        new_assignment = ''.join(offspring_list)
-        _,_,num_satisfied_eval = check_sat_(clauses,new_assignment)
-        if num_satisfied_eval > max_satisfied_so_far: # this clause must be satisfied AND not break any other clauses
-            max_satisfied_so_far = num_satisfied_eval
-            best_assignment=new_assignment
-    return best_assignment
-            
+        return assignment 
+    rand_clause=random.choice(unsatisfied_clauses)
+    rand_clause=clauses[rand_clause]
+    clause_vars = [abs(lit) for lit in rand_clause]
+    if random.random()< FLIP_PROB:
+        x=random.choice(clause_vars)
+    else: # choose variable that minimises the number of unsat clauses when flipped
+        best_x=[]
+        min_broken = float('inf')
+        for x_candidate in clause_vars:
+            broken = get_num_clauses_broken_by_flip(x_candidate,assignment,true_lit_count,lit_clause_mapping)
+            if broken < min_broken:
+                min_broken=broken
+                best_x=[x_candidate]
+            elif broken==min_broken:
+                best_x.append(x_candidate)
+        x=random.choice(best_x)
+    
+    flip_variable(x,assignment,true_lit_count,lit_clause_mapping)
+    
+    return assignment
+    
+    # choose some variable 
 
-def run_ea(clauses,n_vars,time_budget,reps):
-    POP_SIZE=100
-    REPAIR_RATE=0.1
-
+def run_ea(clauses,lit_clause_mapping,n_vars,time_budget,reps):
+    
+    
     for rep in range(reps): # remember to reset t0 and t1
         t0=time.time()
         # global vars
         runtime=0
-        num_satisfied_clauses=0
         pop=get_random_pop(n_vars) # list of assignments
         gen=1
+        
         best_sol=None
         best_fitness=-1
         while True:                    
@@ -121,21 +159,42 @@ def run_ea(clauses,n_vars,time_budget,reps):
             if assignment_dict[pop[0]][2] > best_fitness:
                 best_sol=pop[0]
                 best_fitness=assignment_dict[best_sol][2]
+                print(f"New Best: {best_fitness} at Gen {gen} ({time.time() - t0:.2f} seconds)")
             if time.time()-t0 >= time_budget:
                 runtime = gen * POP_SIZE
+                unsatisfied_count = len(clauses) - best_fitness
+                print(f"Total Clauses in File: {len(clauses)}")
+                print(f"Generations Completed in 60s: {gen}")
+                print(f"satisfied clauses: {best_fitness}/{len(clauses)}")
                 print(f"{runtime}\t{best_fitness}\t{best_sol}")
                 break
             new_pop=[]
-            while len(new_pop)!= POP_SIZE:
+            while len(new_pop)< POP_SIZE:
                 # selection
-                parent_a=tournament_select(pop,3,assignment_dict)
-                parent_b=tournament_select(pop,3,assignment_dict)
+                parent_a=tournament_select(pop,TOURNAMENT_SIZE,assignment_dict)
+                parent_b=tournament_select(pop,TOURNAMENT_SIZE,assignment_dict)
                 # crossover
-                offspring = uniform_crossover(parent_a, parent_b)
-                offspring=mutate(offspring,mutation_rate=0.01)
+                offspring = one_point_crossover(parent_a, parent_b)
+                offspring=mutate(offspring)
                 # repair 
                 if random.random()<REPAIR_RATE:
-                    offspring=repair(offspring,clauses)                
+                    offspring=list(offspring) # list of strings 
+                    # compute the number of true literals per clause given the currnet offspring: 
+                    true_lit_count = [0] * len(clauses)
+                    for clause_idx,clause in enumerate(clauses): 
+                        true_lit_count[clause_idx] = 0
+                        for lit in clause: # a list of ints giving us an index into the offspring array
+                            var_idx = abs(lit) - 1
+
+                            if lit> 0:                                
+                                if offspring[var_idx] == '1':
+                                    true_lit_count[clause_idx] += 1
+                            else:
+                               if offspring[var_idx] == '0':
+                                    true_lit_count[clause_idx] += 1
+                    for _ in range(50):
+                        offspring=walksat_repair(offspring,clauses,true_lit_count,lit_clause_mapping)   
+                    offspring=''.join(offspring)             
                 new_pop.append(offspring)
             
             pop=new_pop
@@ -180,18 +239,30 @@ def main():
         with open (file,'r') as f:
             clauses=[]
             lines = [line.rstrip("\n").split() for line in f]
-            n_vars=0
+            lit_clause_mapping = {}
+            clauses = []
+
             for line in lines:
-                if line[0]=='c':
+                if not line or line[0] in ['c']:
                     continue
-                if line[0]=='p':
-                    n_vars=int(line[2])
-                else:
-                    clauses.append([int(lit) for lit in line[1:-1]])
-            
-        run_ea(clauses,n_vars,time_budget,reps)
-            
-       
+                if line[0] == 'p':
+                    n_vars = int(line[2])
+                    continue
+
+                clause = [int(lit) for lit in line[1:-1]]
+                clause_idx = len(clauses)
+
+                for lit in clause:
+                    if lit not in lit_clause_mapping:
+                        lit_clause_mapping[lit] = []
+                    lit_clause_mapping[lit].append(clause_idx)
+
+                clauses.append(clause)
+                
+        run_ea(clauses,lit_clause_mapping,n_vars,time_budget,reps)
+        
+        
 
 if __name__=='__main__':
     main()
+    
