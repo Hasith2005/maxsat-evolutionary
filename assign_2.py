@@ -2,15 +2,20 @@ import argparse
 import numpy as np
 import time
 import random
+import matplotlib.pyplot as plt
 
-POP_SIZE=20
-print("POP_SIZE= ",POP_SIZE)
+POP_SIZE=50
+# print("POP_SIZE= ",POP_SIZE)
 TOURNAMENT_SIZE=3
-print('TOURNAMENT_SIZE= ',TOURNAMENT_SIZE)
+# print('TOURNAMENT_SIZE= ',TOURNAMENT_SIZE)
 REPAIR_RATE=0.1
-print("REPAIR_RATE= ",REPAIR_RATE)
+# print("REPAIR_RATE= ",REPAIR_RATE)
 FLIP_PROB=0.3
-print("FLIP_PROB= ",FLIP_PROB)
+# print("FLIP_PROB= ",FLIP_PROB)
+STAG_PATIENCE=float('inf')
+# print("STAG PATIENCE =",STAG_PATIENCE)
+WALKSAT_STEPS=50
+# print('WALKSAT STEPS: ',WALKSAT_STEPS)
 
 # question 2
 def get_num_satisfied_clauses(file, assignment):
@@ -133,7 +138,7 @@ def walksat_repair(assignment,clauses,true_lit_count,lit_clause_mapping):
                 best_x=[x_candidate]
             elif broken==min_broken:
                 best_x.append(x_candidate)
-        x=random.choice(best_x)
+        x=random.choice(best_x) # choose the best or randomly choose among equally good solutions. 
     
     flip_variable(x,assignment,true_lit_count,lit_clause_mapping)
     
@@ -142,33 +147,46 @@ def walksat_repair(assignment,clauses,true_lit_count,lit_clause_mapping):
     # choose some variable 
 
 def run_ea(clauses,lit_clause_mapping,n_vars,time_budget,reps):
-    
-    
     for rep in range(reps): # remember to reset t0 and t1
         t0=time.time()
         # global vars
         runtime=0
         pop=get_random_pop(n_vars) # list of assignments
         gen=1
-        
+        stag_count = 0
         best_sol=None
         best_fitness=-1
         while True:                    
             assignment_dict = {assignment:check_sat_(clauses,assignment) for assignment in pop}
             pop.sort(key=lambda x: assignment_dict[x][2],reverse=True)
-            if assignment_dict[pop[0]][2] > best_fitness:
+            current_best=assignment_dict[pop[0]][2]
+            if current_best > best_fitness:
                 best_sol=pop[0]
-                best_fitness=assignment_dict[best_sol][2]
-                print(f"New Best: {best_fitness} at Gen {gen} ({time.time() - t0:.2f} seconds)")
+                best_fitness=current_best
+                stag_count=0
+                
+                # print(f"New Best: {best_fitness} at Gen {gen} ({time.time() - t0:.2f} seconds)")
+            else:
+                stag_count+=1
             if time.time()-t0 >= time_budget:
                 runtime = gen * POP_SIZE
                 unsatisfied_count = len(clauses) - best_fitness
-                print(f"Total Clauses in File: {len(clauses)}")
-                print(f"Generations Completed in 60s: {gen}")
-                print(f"satisfied clauses: {best_fitness}/{len(clauses)}")
+                # print(f"Total Clauses in File: {len(clauses)}")
+                # print(f"Generations Completed in 60s: {gen}")
                 print(f"{runtime}\t{best_fitness}\t{best_sol}")
                 break
             new_pop=[]
+
+            if stag_count>=STAG_PATIENCE:
+                #print(f"Stagnated at Gen {gen}. Nuking population!")
+                pop = get_random_pop(n_vars)
+                # put the best solution somewhere at random in this pop
+                rand_idx=random.choice(range(len(pop)))
+                pop[rand_idx] = best_sol
+                stag_count=0
+                gen+=1
+                continue
+            
             while len(new_pop)< POP_SIZE:
                 # selection
                 parent_a=tournament_select(pop,TOURNAMENT_SIZE,assignment_dict)
@@ -192,15 +210,13 @@ def run_ea(clauses,lit_clause_mapping,n_vars,time_budget,reps):
                             else:
                                if offspring[var_idx] == '0':
                                     true_lit_count[clause_idx] += 1
-                    for _ in range(50):
+                    for _ in range(WALKSAT_STEPS):
                         offspring=walksat_repair(offspring,clauses,true_lit_count,lit_clause_mapping)   
-                    offspring=''.join(offspring)             
-                new_pop.append(offspring)
-            
+                    offspring=''.join(offspring)     
+                new_pop.append(offspring)       
             pop=new_pop
             gen+=1
-            
-        
+
         
 
 def main():
